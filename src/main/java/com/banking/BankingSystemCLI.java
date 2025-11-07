@@ -62,9 +62,12 @@ public class BankingSystemCLI {
                         demonstrateReporting();
                         break;
                     case 5:
-                        demonstrateConcurrentOperations();
+                        demonstrateScheduledOperations();
                         break;
                     case 6:
+                        demonstrateConcurrentOperations();
+                        break;
+                    case 7:
                         showSystemStatus();
                         break;
                     case 0:
@@ -88,8 +91,9 @@ public class BankingSystemCLI {
         System.out.println("2. Async Transactions (CompletableFuture)");
         System.out.println("3. Fraud Detection (Semaphore + BlockingQueue)");
         System.out.println("4. Generate Reports (ReadWriteLock + StampedLock)");
-        System.out.println("5. Concurrent Operations Demo");
-        System.out.println("6. System Status");
+        System.out.println("5. Scheduled Operations (ScheduledThreadPoolExecutor)");
+        System.out.println("6. Concurrent Operations Demo");
+        System.out.println("7. System Status");
         System.out.println("0. Exit");
         System.out.print("Choose an option: ");
     }
@@ -210,6 +214,66 @@ public class BankingSystemCLI {
         reportService.printLockStatistics();
     }
     
+    private void demonstrateScheduledOperations() {
+        System.out.println("\n=== Scheduled Operations Demo ===");
+        System.out.println("Demonstrating ScheduledThreadPoolExecutor functionality...");
+        
+        // Start periodic reporting every 2 seconds
+        System.out.println("1. Starting periodic reporting (every 2 seconds)...");
+        reportService.startPeriodicReporting(1, 2, java.util.concurrent.TimeUnit.SECONDS);
+        
+        // Start periodic maintenance every 3 seconds with 1 second delay between completions
+        System.out.println("2. Starting periodic maintenance (every 3 seconds after completion)...");
+        reportService.startPeriodicMaintenance(2, 3, java.util.concurrent.TimeUnit.SECONDS);
+        
+        // Schedule some delayed reports
+        System.out.println("3. Scheduling delayed reports...");
+        java.util.concurrent.ScheduledFuture<String> delayedReport1 = 
+                reportService.scheduleDelayedReport("ACC001", 3, java.util.concurrent.TimeUnit.SECONDS);
+        java.util.concurrent.ScheduledFuture<String> delayedReport2 = 
+                reportService.scheduleDelayedReport("ACC002", 5, java.util.concurrent.TimeUnit.SECONDS);
+        
+        System.out.println("4. Letting scheduled operations run for 10 seconds...");
+        System.out.println("   Watch the periodic reports and maintenance tasks execute!");
+        
+        try {
+            // Let it run for 10 seconds to see multiple executions
+            Thread.sleep(10000);
+            
+            // Try to get the delayed reports
+            System.out.println("\n5. Retrieving delayed reports:");
+            try {
+                String report1 = delayedReport1.get(1, java.util.concurrent.TimeUnit.SECONDS);
+                System.out.println("Delayed Report 1 completed:\n" + report1);
+            } catch (java.util.concurrent.TimeoutException e) {
+                System.out.println("Delayed Report 1 still pending...");
+            }
+            
+            try {
+                String report2 = delayedReport2.get(1, java.util.concurrent.TimeUnit.SECONDS);
+                System.out.println("Delayed Report 2 completed:\n" + report2);
+            } catch (java.util.concurrent.TimeoutException e) {
+                System.out.println("Delayed Report 2 still pending...");
+            }
+            
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            System.err.println("Error retrieving delayed reports: " + e.getMessage());
+        }
+        
+        // Stop periodic reporting for this demo
+        System.out.println("\n6. Stopping periodic reporting...");
+        reportService.stopPeriodicReporting();
+        
+        // Show scheduled operations statistics
+        System.out.println("\n7. Scheduled Operations Statistics:");
+        System.out.println(reportService.getScheduledOperationsStatistics());
+        
+        System.out.println("\nScheduled operations demo completed!");
+        System.out.println("Note: Maintenance tasks will continue running until system shutdown.");
+    }
+    
     private void demonstrateConcurrentOperations() {
         System.out.println("\n=== Concurrent Operations Demo ===");
         System.out.println("Running multiple operations simultaneously...");
@@ -277,19 +341,32 @@ public class BankingSystemCLI {
     private void shutdown() {
         System.out.println("\nShutting down banking system...");
         
-        // Shutdown all services
+        // Shutdown all services with proper executor lifecycle management
+        System.out.println("Shutting down TransactionService...");
         transactionService.shutdown();
+        
+        System.out.println("Shutting down FraudDetectionService...");
         fraudDetectionService.shutdown();
+        
+        System.out.println("Shutting down ReportService (including ScheduledThreadPoolExecutor)...");
+        reportService.shutdown();
+        
+        System.out.println("Shutting down demo executor...");
         demoExecutor.shutdown();
         
         try {
             if (!demoExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                System.out.println("Demo executor did not terminate gracefully, forcing shutdown...");
                 demoExecutor.shutdownNow();
             }
         } catch (InterruptedException e) {
             demoExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        
+        // Show final statistics
+        System.out.println("\n=== Final System Statistics ===");
+        System.out.println(reportService.getScheduledOperationsStatistics());
         
         System.out.println("Banking system shutdown complete.");
         System.out.println("Final account status:");

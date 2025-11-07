@@ -2,7 +2,9 @@ package com.banking.service;
 
 import com.banking.model.Account;
 
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.StampedLock;
@@ -12,6 +14,12 @@ public class ReportService {
     private final ReadWriteLock reportLock;
     private final StampedLock statisticsLock;
     private final ConcurrentHashMap<String, String> reportCache;
+    
+    // ScheduledThreadPoolExecutor for periodic operations
+    private final ScheduledExecutorService scheduledExecutor;
+    private final AtomicBoolean isScheduledReportingActive;
+    private final AtomicLong reportGenerationCount;
+    private final AtomicLong maintenanceTaskCount;
     
     // Statistics data protected by StampedLock
     private volatile double totalBalance;
@@ -23,6 +31,17 @@ public class ReportService {
         this.reportLock = new ReentrantReadWriteLock();
         this.statisticsLock = new StampedLock();
         this.reportCache = new ConcurrentHashMap<>();
+        
+        // Initialize ScheduledThreadPoolExecutor with 2 threads for periodic operations
+        this.scheduledExecutor = Executors.newScheduledThreadPool(2, r -> {
+            Thread t = new Thread(r, "ReportService-Scheduler-" + System.currentTimeMillis());
+            t.setDaemon(true); // Allow JVM to exit even if these threads are running
+            return t;
+        });
+        
+        this.isScheduledReportingActive = new AtomicBoolean(false);
+        this.reportGenerationCount = new AtomicLong(0);
+        this.maintenanceTaskCount = new AtomicLong(0);
         
         // Initialize statistics
         updateStatistics();
@@ -193,6 +212,219 @@ public class ReportService {
         }
     }
     
+    // ========== SCHEDULED OPERATIONS USING ScheduledThreadPoolExecutor ==========
+    
+    /**
+     * Starts periodic report generation using ScheduledThreadPoolExecutor
+     * Demonstrates scheduleAtFixedRate for regular intervals
+     */
+    public void startPeriodicReporting(long initialDelay, long period, TimeUnit timeUnit) {
+        if (isScheduledReportingActive.compareAndSet(false, true)) {
+            System.out.printf("[%s] Starting periodic reporting - Initial delay: %d %s, Period: %d %s%n",
+                    Thread.currentThread().getName(), initialDelay, timeUnit, period, timeUnit);
+            
+            scheduledExecutor.scheduleAtFixedRate(() -> {
+                try {
+                    System.out.printf("[%s] Executing scheduled report generation (Count: %d)%n",
+                            Thread.currentThread().getName(), reportGenerationCount.incrementAndGet());
+                    
+                    // Update statistics as part of periodic reporting
+                    updateStatistics();
+                    
+                    // Generate a summary report
+                    String summary = calculateBankStatistics();
+                    System.out.printf("[%s] Periodic Report Generated:%n%s%n",
+                            Thread.currentThread().getName(), summary);
+                    
+                    // Simulate some processing time
+                    Thread.sleep(100);
+                    
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.out.printf("[%s] Periodic reporting interrupted%n", Thread.currentThread().getName());
+                } catch (Exception e) {
+                    System.err.printf("[%s] Error in periodic reporting: %s%n", 
+                            Thread.currentThread().getName(), e.getMessage());
+                }
+            }, initialDelay, period, timeUnit);
+            
+            System.out.printf("[%s] Periodic reporting scheduled successfully%n", Thread.currentThread().getName());
+        } else {
+            System.out.printf("[%s] Periodic reporting is already active%n", Thread.currentThread().getName());
+        }
+    }
+    
+    /**
+     * Starts periodic maintenance tasks using ScheduledThreadPoolExecutor
+     * Demonstrates scheduleWithFixedDelay for tasks that need completion gaps
+     */
+    public void startPeriodicMaintenance(long initialDelay, long delay, TimeUnit timeUnit) {
+        System.out.printf("[%s] Starting periodic maintenance - Initial delay: %d %s, Delay: %d %s%n",
+                Thread.currentThread().getName(), initialDelay, timeUnit, delay, timeUnit);
+        
+        scheduledExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                long taskCount = maintenanceTaskCount.incrementAndGet();
+                System.out.printf("[%s] Executing scheduled maintenance task (Count: %d)%n",
+                        Thread.currentThread().getName(), taskCount);
+                
+                // Perform cache cleanup
+                performCacheCleanup();
+                
+                // Perform statistics validation
+                validateStatistics();
+                
+                // Simulate maintenance processing time
+                Thread.sleep(200);
+                
+                System.out.printf("[%s] Maintenance task %d completed%n", 
+                        Thread.currentThread().getName(), taskCount);
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.out.printf("[%s] Maintenance task interrupted%n", Thread.currentThread().getName());
+            } catch (Exception e) {
+                System.err.printf("[%s] Error in maintenance task: %s%n", 
+                        Thread.currentThread().getName(), e.getMessage());
+            }
+        }, initialDelay, delay, timeUnit);
+        
+        System.out.printf("[%s] Periodic maintenance scheduled successfully%n", Thread.currentThread().getName());
+    }
+    
+    /**
+     * Schedules a one-time delayed task using ScheduledThreadPoolExecutor
+     * Demonstrates schedule() method for single execution
+     */
+    public ScheduledFuture<String> scheduleDelayedReport(String accountId, long delay, TimeUnit timeUnit) {
+        System.out.printf("[%s] Scheduling delayed report for account %s in %d %s%n",
+                Thread.currentThread().getName(), accountId, delay, timeUnit);
+        
+        return scheduledExecutor.schedule(() -> {
+            System.out.printf("[%s] Executing delayed report generation for account %s%n",
+                    Thread.currentThread().getName(), accountId);
+            
+            String report = generateAccountReport(accountId);
+            
+            System.out.printf("[%s] Delayed report completed for account %s%n",
+                    Thread.currentThread().getName(), accountId);
+            
+            return report;
+        }, delay, timeUnit);
+    }
+    
+    /**
+     * Stops periodic reporting
+     */
+    public void stopPeriodicReporting() {
+        if (isScheduledReportingActive.compareAndSet(true, false)) {
+            System.out.printf("[%s] Stopping periodic reporting%n", Thread.currentThread().getName());
+        }
+    }
+    
+    /**
+     * Performs cache cleanup as part of maintenance
+     */
+    private void performCacheCleanup() {
+        System.out.printf("[%s] Performing cache cleanup - Current cache size: %d%n",
+                Thread.currentThread().getName(), reportCache.size());
+        
+        // Remove old cached reports (simulate by clearing cache if it gets too large)
+        if (reportCache.size() > 10) {
+            reportCache.clear();
+            System.out.printf("[%s] Cache cleared due to size limit%n", Thread.currentThread().getName());
+        }
+    }
+    
+    /**
+     * Validates statistics as part of maintenance
+     */
+    private void validateStatistics() {
+        System.out.printf("[%s] Validating statistics - Balance: %.2f, Transactions: %d, Accounts: %d%n",
+                Thread.currentThread().getName(), totalBalance, totalTransactions, activeAccounts);
+        
+        // Perform validation logic (in real system, this would check data consistency)
+        if (totalBalance < 0) {
+            System.err.printf("[%s] WARNING: Negative total balance detected: %.2f%n",
+                    Thread.currentThread().getName(), totalBalance);
+        }
+        
+        if (activeAccounts < 0) {
+            System.err.printf("[%s] WARNING: Negative active accounts detected: %d%n",
+                    Thread.currentThread().getName(), activeAccounts);
+        }
+    }
+    
+    /**
+     * Proper executor lifecycle management - graceful shutdown
+     */
+    public void shutdown() {
+        System.out.printf("[%s] Initiating ReportService shutdown%n", Thread.currentThread().getName());
+        
+        // Stop periodic reporting
+        stopPeriodicReporting();
+        
+        // Shutdown the scheduled executor
+        scheduledExecutor.shutdown();
+        
+        try {
+            // Wait for existing tasks to complete
+            if (!scheduledExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                System.out.printf("[%s] Executor did not terminate gracefully, forcing shutdown%n", 
+                        Thread.currentThread().getName());
+                scheduledExecutor.shutdownNow();
+                
+                // Wait a bit more for tasks to respond to being cancelled
+                if (!scheduledExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    System.err.printf("[%s] Executor did not terminate after forced shutdown%n", 
+                            Thread.currentThread().getName());
+                }
+            } else {
+                System.out.printf("[%s] ReportService shutdown completed gracefully%n", 
+                        Thread.currentThread().getName());
+            }
+        } catch (InterruptedException e) {
+            // Re-cancel if current thread also interrupted
+            scheduledExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+            System.err.printf("[%s] Shutdown interrupted%n", Thread.currentThread().getName());
+        }
+    }
+    
+    /**
+     * Check if the scheduled executor is shutdown
+     */
+    public boolean isShutdown() {
+        return scheduledExecutor.isShutdown();
+    }
+    
+    /**
+     * Check if all tasks have completed execution following shutdown
+     */
+    public boolean isTerminated() {
+        return scheduledExecutor.isTerminated();
+    }
+    
+    /**
+     * Get statistics about scheduled operations
+     */
+    public String getScheduledOperationsStatistics() {
+        return String.format(
+                "=== Scheduled Operations Statistics ===\n" +
+                "Periodic Reporting Active: %s\n" +
+                "Report Generation Count: %d\n" +
+                "Maintenance Task Count: %d\n" +
+                "Executor Shutdown: %s\n" +
+                "Executor Terminated: %s\n" +
+                "======================================",
+                isScheduledReportingActive.get(),
+                reportGenerationCount.get(),
+                maintenanceTaskCount.get(),
+                scheduledExecutor.isShutdown(),
+                scheduledExecutor.isTerminated()
+        );
+    }
+    
     public void printLockStatistics() {
         System.out.println("\n=== Lock Statistics ===");
         
@@ -208,6 +440,9 @@ public class ReportService {
         System.out.printf("Report cache size: %d%n", reportCache.size());
         System.out.printf("Current statistics - Balance: %.2f, Transactions: %d, Accounts: %d%n",
                 totalBalance, totalTransactions, activeAccounts);
+        
+        // Add scheduled operations statistics
+        System.out.println(getScheduledOperationsStatistics());
         System.out.println("======================\n");
     }
 }
